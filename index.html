@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- saved from url=(0062)file:///C:/Users/Usuario/Downloads/straza-cotizador-v4_53.html -->
+<!-- saved from url=(0062)file:///C:/Users/Usuario/Downloads/straza-cotizador-v4_54.html -->
 <html lang="es"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -449,7 +449,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
       <div id="costos-cat-body"></div>
     </div>
     <button class="btn-exp" onclick="exportar()">↓ Exportar cotizacion PDF</button>
-    <button class="btn-exp-xls" onclick="exportarCotizacionExcel()">↓ Exportar cotizacion editable (Excel)</button>
+    <button class="btn-exp-xls" onclick="exportarPDFeditable()">✎ Exportar PDF editable (ajustar precios)</button>
     <button class="btn-email" onclick="enviarEmail()">✉ Enviar por correo</button>
     <button class="btn-compras" onclick="exportarMaterialesCompras()">🛒 Lista de materiales para compras (Excel)</button>
     <button class="btn-clr" onclick="resetCot()">Limpiar cotizacion</button>
@@ -1454,49 +1454,176 @@ function descargarCSV(filas, nombre){
 }
 
 // 1) Cotización editable: productos, cantidades, precios (se pueden cambiar en Excel)
-function exportarCotizacionExcel(){
+// 1) PDF EDITABLE: precios en campos resaltados, recalcula el total automáticamente
+let _pdfLibCargando=null;
+function cargarPdfLib(){
+  if(window.PDFLib) return Promise.resolve();
+  if(_pdfLibCargando) return _pdfLibCargando;
+  _pdfLibCargando=new Promise((resolve,reject)=>{
+    const s=document.createElement('script');
+    s.src='https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js';
+    s.onload=()=>resolve();
+    s.onerror=()=>reject(new Error('No se pudo cargar la librería PDF. Revisa tu conexión a internet.'));
+    document.head.appendChild(s);
+  });
+  return _pdfLibCargando;
+}
+
+async function exportarPDFeditable(){
   if(!window._prods.length){ showToast('No hay productos en la cotización'); return; }
+  showToast('Generando PDF editable...');
+  try{
+    await cargarPdfLib();
+  }catch(e){
+    showToast('Necesitas internet para el PDF editable');
+    return;
+  }
+
   const cliente=document.getElementById('cot-cliente').value.trim()||'Cliente';
   const ref=document.getElementById('cot-ref').value.trim();
   const proyecto=document.getElementById('cot-proyecto').value.trim()||'Cotización';
   const iva=parseFloat(document.getElementById('cot-iva').value)||19;
   const fecha=new Date().toLocaleDateString('es-CO');
 
-  const filas=[];
-  filas.push(['STRAZA — Cotización editable']);
-  filas.push(['Cliente',cliente]);
-  filas.push(['Referencia',ref]);
-  filas.push(['Proyecto',proyecto]);
-  filas.push(['Fecha',fecha]);
-  filas.push(['IVA %',iva]);
-  filas.push([]);
-  filas.push(['Producto','Cantidad','Precio unitario','Subtotal','Total con IVA']);
+  const { PDFDocument, StandardFonts, rgb } = window.PDFLib;
+  const doc = await PDFDocument.create();
+  const form = doc.getForm();
+  const fontBold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
 
-  let grandSub=0, grandTot=0;
-  window._prods.forEach(p=>{
+  // Colores Straza
+  const navy = rgb(0.118,0.059,0.631);
+  const gold = rgb(0.910,0.784,0.251);
+  const highlight = rgb(1,0.976,0.882); // amarillo suave para campos editables
+  const gray = rgb(0.4,0.4,0.4);
+
+  let page = doc.addPage([595,842]); // A4
+  const W=595;
+  let y=800;
+
+  // Encabezado
+  page.drawText('STRAZA', {x:40,y:y,size:22,font:fontBold,color:navy});
+  page.drawText('Cotización', {x:40,y:y-18,size:9,font:font,color:gray});
+  page.drawText('Cliente: '+cliente, {x:W-260,y:y,size:9,font:font,color:gray});
+  if(ref) page.drawText('Código: '+ref, {x:W-260,y:y-13,size:9,font:font,color:gray});
+  page.drawText('Fecha: '+fecha, {x:W-260,y:y-26,size:9,font:font,color:gray});
+  y-=55;
+  page.drawText(proyecto, {x:40,y:y,size:15,font:fontBold,color:navy});
+  y-=12;
+  page.drawText('IVA '+iva+'% · Los campos amarillos son editables — el total se recalcula solo', {x:40,y:y,size:7.5,font:font,color:gray});
+  y-=25;
+
+  // Cabecera de tabla
+  page.drawRectangle({x:40,y:y-4,width:W-80,height:20,color:navy});
+  page.drawText('Producto', {x:48,y:y,size:8,font:fontBold,color:rgb(1,1,1)});
+  page.drawText('Cant.', {x:270,y:y,size:8,font:fontBold,color:rgb(1,1,1)});
+  page.drawText('Precio unit.', {x:330,y:y,size:8,font:fontBold,color:rgb(1,1,1)});
+  page.drawText('Subtotal', {x:450,y:y,size:8,font:fontBold,color:rgb(1,1,1)});
+  y-=24;
+
+  // Recolectar líneas
+  const lineas=[];
+  window._prods.forEach((p)=>{
     const cu=calcCostoUnit(p);
-    p.cantidades.filter(e=>e.cant>0).forEach(entry=>{
-      const vu=calcVenta(cu,entry.margen||0);
-      const sub=vu*entry.cant;
-      const tot=sub*(1+iva/100);
-      grandSub+=sub; grandTot+=tot;
-      // Precios como números (sin símbolo) para que sean editables y recalculables en Excel
-      filas.push([p.nombre, entry.cant, Math.round(vu), Math.round(sub), Math.round(tot)]);
+    p.cantidades.filter(e=>e.cant>0).forEach((entry)=>{
+      const vu=Math.round(calcVenta(cu,entry.margen||0));
+      lineas.push({nombre:p.nombre, cant:entry.cant, precio:vu});
     });
   });
-  filas.push([]);
-  filas.push(['','','TOTAL Subtotal',Math.round(grandSub),'']);
-  filas.push(['','','TOTAL con IVA','',Math.round(grandTot)]);
-  filas.push([]);
-  filas.push(['Nota: Los precios están sin formato para que puedas editarlos y recalcular en Excel.']);
 
+  const nombresPrecios=[]; // ids de los campos de precio
+  const nombresSubs=[];    // ids de los campos de subtotal
+
+  lineas.forEach((ln,i)=>{
+    if(y<120){ page=doc.addPage([595,842]); y=800; }
+    const nombreCorto = ln.nombre.length>42 ? ln.nombre.slice(0,40)+'…' : ln.nombre;
+    page.drawText(nombreCorto, {x:48,y:y,size:8,font:font,color:rgb(0.1,0.1,0.1)});
+    page.drawText(String(ln.cant), {x:274,y:y,size:8,font:font,color:rgb(0.1,0.1,0.1)});
+
+    // Campo editable de PRECIO (resaltado)
+    const fPrecio = form.createTextField('precio_'+i);
+    fPrecio.setText(String(ln.precio));
+    fPrecio.addToPage(page, {x:326,y:y-4,width:90,height:14,
+      backgroundColor:highlight, borderColor:gold, borderWidth:0.8});
+    fPrecio.setFontSize(8);
+    nombresPrecios.push('precio_'+i);
+
+    // Campo de SUBTOTAL (solo lectura, se calcula)
+    const fSub = form.createTextField('sub_'+i);
+    fSub.setText(String(ln.precio*ln.cant));
+    fSub.enableReadOnly();
+    fSub.addToPage(page, {x:446,y:y-4,width:100,height:14,
+      borderColor:rgb(0.85,0.85,0.85), borderWidth:0.5});
+    fSub.setFontSize(8);
+    nombresSubs.push('sub_'+i);
+
+    y-=22;
+  });
+
+  y-=10;
+  // Campo TOTAL (solo lectura)
+  if(y<100){ page=doc.addPage([595,842]); y=800; }
+  page.drawRectangle({x:W-260,y:y-6,width:220,height:22,color:navy});
+  page.drawText('TOTAL con IVA', {x:W-252,y:y,size:9,font:fontBold,color:rgb(1,1,1)});
+  const fTotal = form.createTextField('total_final');
+  const totalIni = lineas.reduce((s,l)=>s+l.precio*l.cant,0)*(1+iva/100);
+  fTotal.setText(String(Math.round(totalIni)));
+  fTotal.enableReadOnly();
+  fTotal.addToPage(page, {x:W-150,y:y-4,width:105,height:14,
+    backgroundColor:rgb(0.118,0.059,0.631), borderWidth:0});
+  fTotal.setFontSize(9);
+
+  // JavaScript embebido: recalcula subtotales y total al cambiar un precio
+  const cantidades = lineas.map(l=>l.cant);
+  const jsRecalc =
+    'var cants=['+cantidades.join(',')+'];'+
+    'var iva='+iva+';'+
+    'var total=0;'+
+    'for(var i=0;i<cants.length;i++){'+
+    ' var pf=this.getField("precio_"+i);'+
+    ' var sf=this.getField("sub_"+i);'+
+    ' var precio=parseFloat(pf.value)||0;'+
+    ' var sub=Math.round(precio*cants[i]);'+
+    ' sf.value=String(sub);'+
+    ' total+=sub;'+
+    '}'+
+    'var tf=this.getField("total_final");'+
+    'tf.value=String(Math.round(total*(1+iva/100)));';
+
+  const { PDFName, PDFString } = window.PDFLib;
+
+  // A cada campo de precio le asignamos una accion de "Calculate" (AA/C)
+  nombresPrecios.forEach(nom=>{
+    const field = form.getField(nom);
+    const dictAcro = field.acroField.dict;
+    const jsAction = doc.context.obj({
+      S: PDFName.of('JavaScript'),
+      JS: PDFString.of(jsRecalc)
+    });
+    const aaDict = doc.context.obj({});
+    aaDict.set(PDFName.of('C'), jsAction);
+    dictAcro.set(PDFName.of('AA'), aaDict);
+  });
+
+  // Orden de calculo (CO): campos que disparan recalculo
+  const acroForm = form.acroForm;
+  const coArray = doc.context.obj(
+    nombresPrecios.map(nom=>form.getField(nom).acroField.ref)
+  );
+  acroForm.dict.set(PDFName.of('CO'), coArray);
+
+
+  const pdfBytes = await doc.save();
+  const blob = new Blob([pdfBytes], {type:'application/pdf'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
   let baseNom = '';
   if(ref) baseNom += ref;
-  if(proyecto && proyecto!=='Cotización'){ baseNom += (baseNom?'_':'') + proyecto; }
+  if(proyecto && proyecto!=='Cotización'){ baseNom += (baseNom?' - ':'') + proyecto; }
   if(!baseNom) baseNom = cliente;
-  const nombreArch='Cotizacion_'+baseNom.replace(/[^a-zA-Z0-9]/g,'_')+'.csv';
-  descargarCSV(filas, nombreArch);
-  showToast('Cotización exportada a Excel ✓');
+  a.href=url; a.download=(baseNom.replace(/[\\/:*?"<>|]/g,'-'))+' (editable).pdf';
+  a.click(); URL.revokeObjectURL(url);
+  showToast('PDF editable descargado ✓');
 }
 
 // 2) Lista de materiales para compras (si el proyecto se aprueba)
