@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- saved from url=(0062)file:///C:/Users/Usuario/Downloads/straza-cotizador-v4_48.html -->
+<!-- saved from url=(0062)file:///C:/Users/Usuario/Downloads/straza-cotizador-v4_49.html -->
 <html lang="es"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -639,19 +639,51 @@ async function nubeSubirTodo(){
     const okMat = await nubeSubirMaterialesLotes();
     if(!okMat){ nubeSetEstado('off','Error al subir materiales'); showToast('Error subiendo materiales'); return; }
 
-    // Cotizaciones una por una
-    nubeSetEstado('sync','Subiendo cotizaciones...');
+    // Cotizaciones (partidas en pedazos si son grandes)
     const cots = loadCotizaciones();
-    let hechas=0;
-    for(const c of cots){
-      try{ await nubeCall({action:'saveCotizacion', payload: JSON.stringify(c)}); hechas++; }
-      catch(e){ /* seguir con las demás */ }
+    let hechas=0, fallidas=0;
+    for(let i=0;i<cots.length;i++){
+      nubeSetEstado('sync','Cotizaciones '+(i+1)+'/'+cots.length+'...');
+      const ok = await nubeSubirUnaCotizacion(cots[i]);
+      if(ok) hechas++; else fallidas++;
     }
     nubeSetEstado('on','Conectado ✓');
-    showToast('Subido a la nube ✓ ('+hechas+' cotizaciones, '+materiales.length+' materiales)');
+    if(fallidas>0) showToast('Subido: '+hechas+' cotizaciones ('+fallidas+' fallaron), '+materiales.length+' materiales');
+    else showToast('Subido a la nube ✓ ('+hechas+' cotizaciones, '+materiales.length+' materiales)');
   }catch(e){
     nubeSetEstado('off','Error al subir');
     showToast('Error al subir. Intenta de nuevo.');
+  }
+}
+
+// Sube UNA cotización. Si es grande, la parte en pedazos que sí caben en la URL.
+async function nubeSubirUnaCotizacion(cot){
+  const texto = JSON.stringify(cot);
+  const TROZO = 1200; // caracteres por pedazo (seguro para la URL)
+  try{
+    if(texto.length <= TROZO){
+      // Cabe de una: envío normal
+      const r = await nubeCall({action:'saveCotizacion', payload: texto});
+      return !!(r && r.ok);
+    }
+    // Grande: partir en pedazos numerados
+    const total = Math.ceil(texto.length/TROZO);
+    for(let p=0;p<total;p++){
+      const pedazo = texto.substring(p*TROZO,(p+1)*TROZO);
+      const r = await nubeCall({
+        action:'saveCotChunk',
+        id: cot.id,
+        parte: p,
+        total: total,
+        chunk: pedazo
+      });
+      if(!(r && r.ok)) return false;
+    }
+    // Ensamblar en el servidor
+    const rf = await nubeCall({action:'ensamblarCot', id: cot.id});
+    return !!(rf && rf.ok);
+  }catch(e){
+    return false;
   }
 }
 
@@ -717,8 +749,8 @@ async function nubeSubirMateriales(){
 // Sincronización silenciosa de UNA cotización al guardar (best-effort)
 function nubeSyncCotizacion(cot){
   if(!nubeGetURL()) return;
-  nubeCall({action:'saveCotizacion', payload: JSON.stringify(cot)})
-    .then(()=>{ nubeSetEstado('on','Guardado en nube ✓'); })
+  nubeSubirUnaCotizacion(cot)
+    .then(ok=>{ if(ok) nubeSetEstado('on','Guardado en nube ✓'); })
     .catch(()=>{ /* queda local; se subirá manualmente */ });
 }
 
