@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- saved from url=(0062)file:///C:/Users/Usuario/Downloads/straza-cotizador-v4_56.html -->
+<!-- saved from url=(0062)file:///C:/Users/Usuario/Downloads/straza-cotizador-v4_57.html -->
 <html lang="es"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -1486,10 +1486,21 @@ function exportarPDFeditable(){
       filaIdx++;
     });
     const hasDesc=!!p.desc;
-    let prodHeader='<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:.55rem"><tr>'
-      +'<td colspan="2" valign="middle"><strong style="font-size:.96rem">'+String(idx+1).padStart(2,'0')+'. '+esc(p.nombre)+'</strong></td></tr>'
-      +(hasDesc?'<tr><td colspan="2" style="font-size:.79rem;color:#555;padding-top:.15rem">'+esc(p.desc)+'</td></tr>':'')
-      +'</table>';
+    let prodHeader;
+    if(p.foto){
+      prodHeader='<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:.55rem"><tr>'
+        +'<td width="114" valign="middle" style="padding-right:12px">'
+        +'<img src="'+p.foto+'" width="100" height="100" style="display:block;object-fit:contain;border:1px solid #ddd;background:#f4f4f4">'
+        +'</td>'
+        +'<td valign="middle"><strong style="font-size:.96rem">'+String(idx+1).padStart(2,'0')+'. '+esc(p.nombre)+'</strong></td></tr>'
+        +(hasDesc?'<tr><td></td><td style="font-size:.79rem;color:#555;padding-top:.15rem">'+esc(p.desc)+'</td></tr>':'')
+        +'</table>';
+    } else {
+      prodHeader='<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:.55rem"><tr>'
+        +'<td colspan="2" valign="middle"><strong style="font-size:.96rem">'+String(idx+1).padStart(2,'0')+'. '+esc(p.nombre)+'</strong></td></tr>'
+        +(hasDesc?'<tr><td colspan="2" style="font-size:.79rem;color:#555;padding-top:.15rem">'+esc(p.desc)+'</td></tr>':'')
+        +'</table>';
+    }
     prodsHtml+='<div style="margin-bottom:1.8rem;page-break-inside:avoid">'+prodHeader
       +'<table width="100%" style="border-collapse:collapse;font-size:.8rem"><thead><tr>'
       +'<th style="background:#1E0FA1;color:#fff;padding:.48rem .75rem;text-align:left;font-size:.65rem;letter-spacing:.08em;text-transform:uppercase">Cantidad</th>'
