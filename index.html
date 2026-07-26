@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- saved from url=(0062)file:///C:/Users/Usuario/Downloads/straza-cotizador-v4_54.html -->
+<!-- saved from url=(0062)file:///C:/Users/Usuario/Downloads/straza-cotizador-v4_55.html -->
 <html lang="es"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -1453,177 +1453,127 @@ function descargarCSV(filas, nombre){
   a.click(); URL.revokeObjectURL(url);
 }
 
-// 1) Cotización editable: productos, cantidades, precios (se pueden cambiar en Excel)
-// 1) PDF EDITABLE: precios en campos resaltados, recalcula el total automáticamente
-let _pdfLibCargando=null;
-function cargarPdfLib(){
-  if(window.PDFLib) return Promise.resolve();
-  if(_pdfLibCargando) return _pdfLibCargando;
-  _pdfLibCargando=new Promise((resolve,reject)=>{
-    const s=document.createElement('script');
-    s.src='https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js';
-    s.onload=()=>resolve();
-    s.onerror=()=>reject(new Error('No se pudo cargar la librería PDF. Revisa tu conexión a internet.'));
-    document.head.appendChild(s);
-  });
-  return _pdfLibCargando;
-}
-
-async function exportarPDFeditable(){
+// PDF EDITABLE: se abre en ventana nueva (igual que el PDF normal) con los
+// precios y cantidades como campos editables; los totales se recalculan solos.
+function exportarPDFeditable(){
   if(!window._prods.length){ showToast('No hay productos en la cotización'); return; }
-  showToast('Generando PDF editable...');
-  try{
-    await cargarPdfLib();
-  }catch(e){
-    showToast('Necesitas internet para el PDF editable');
-    return;
-  }
-
   const cliente=document.getElementById('cot-cliente').value.trim()||'Cliente';
   const ref=document.getElementById('cot-ref').value.trim();
   const proyecto=document.getElementById('cot-proyecto').value.trim()||'Cotización';
+  const validez=document.getElementById('cot-validez').value.trim()||'30 días';
   const iva=parseFloat(document.getElementById('cot-iva').value)||19;
-  const fecha=new Date().toLocaleDateString('es-CO');
+  const fecha=new Date().toLocaleDateString('es-CO',{year:'numeric',month:'long',day:'numeric'});
 
-  const { PDFDocument, StandardFonts, rgb } = window.PDFLib;
-  const doc = await PDFDocument.create();
-  const form = doc.getForm();
-  const fontBold = await doc.embedFont(StandardFonts.HelveticaBold);
-  const font = await doc.embedFont(StandardFonts.Helvetica);
-
-  // Colores Straza
-  const navy = rgb(0.118,0.059,0.631);
-  const gold = rgb(0.910,0.784,0.251);
-  const highlight = rgb(1,0.976,0.882); // amarillo suave para campos editables
-  const gray = rgb(0.4,0.4,0.4);
-
-  let page = doc.addPage([595,842]); // A4
-  const W=595;
-  let y=800;
-
-  // Encabezado
-  page.drawText('STRAZA', {x:40,y:y,size:22,font:fontBold,color:navy});
-  page.drawText('Cotización', {x:40,y:y-18,size:9,font:font,color:gray});
-  page.drawText('Cliente: '+cliente, {x:W-260,y:y,size:9,font:font,color:gray});
-  if(ref) page.drawText('Código: '+ref, {x:W-260,y:y-13,size:9,font:font,color:gray});
-  page.drawText('Fecha: '+fecha, {x:W-260,y:y-26,size:9,font:font,color:gray});
-  y-=55;
-  page.drawText(proyecto, {x:40,y:y,size:15,font:fontBold,color:navy});
-  y-=12;
-  page.drawText('IVA '+iva+'% · Los campos amarillos son editables — el total se recalcula solo', {x:40,y:y,size:7.5,font:font,color:gray});
-  y-=25;
-
-  // Cabecera de tabla
-  page.drawRectangle({x:40,y:y-4,width:W-80,height:20,color:navy});
-  page.drawText('Producto', {x:48,y:y,size:8,font:fontBold,color:rgb(1,1,1)});
-  page.drawText('Cant.', {x:270,y:y,size:8,font:fontBold,color:rgb(1,1,1)});
-  page.drawText('Precio unit.', {x:330,y:y,size:8,font:fontBold,color:rgb(1,1,1)});
-  page.drawText('Subtotal', {x:450,y:y,size:8,font:fontBold,color:rgb(1,1,1)});
-  y-=24;
-
-  // Recolectar líneas
-  const lineas=[];
-  window._prods.forEach((p)=>{
+  // Recolectar todas las líneas (una por cada cantidad de cada producto)
+  const D=[]; // datos para el script de recálculo
+  let prodsHtml='';
+  let filaIdx=0;
+  window._prods.forEach((p,idx)=>{
     const cu=calcCostoUnit(p);
-    p.cantidades.filter(e=>e.cant>0).forEach((entry)=>{
+    let filas='';
+    p.cantidades.filter(e=>e.cant>0).forEach(entry=>{
       const vu=Math.round(calcVenta(cu,entry.margen||0));
-      lineas.push({nombre:p.nombre, cant:entry.cant, precio:vu});
+      const i=filaIdx;
+      D.push({id:'pr_'+i, cid:'c_'+i, cant:entry.cant, iva:iva});
+      filas+='<tr>'
+        +'<td style="text-align:left"><input type="number" id="c_'+i+'" value="'+entry.cant+'" min="1" oninput="recalc()" '
+        +'style="width:70px;border:2px solid #888;padding:.3rem .5rem;font-size:.82rem;text-align:center;color:#333;background:#f8f8f8;font-family:inherit"> und.</td>'
+        +'<td style="text-align:right"><input type="number" id="pr_'+i+'" value="'+vu+'" oninput="recalc()" '
+        +'style="width:120px;border:2px solid #1E0FA1;padding:.3rem .5rem;font-size:.82rem;text-align:right;color:#1E0FA1;font-weight:700;background:#f0f4ff;font-family:inherit"></td>'
+        +'<td id="sb_'+i+'" style="text-align:right"></td>'
+        +'<td id="tt_'+i+'" style="text-align:right;font-weight:700"></td>'
+        +'</tr>';
+      filaIdx++;
     });
+    const hasDesc=!!p.desc;
+    let prodHeader='<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:.55rem"><tr>'
+      +'<td colspan="2" valign="middle"><strong style="font-size:.96rem">'+String(idx+1).padStart(2,'0')+'. '+esc(p.nombre)+'</strong></td></tr>'
+      +(hasDesc?'<tr><td colspan="2" style="font-size:.79rem;color:#555;padding-top:.15rem">'+esc(p.desc)+'</td></tr>':'')
+      +'</table>';
+    prodsHtml+='<div style="margin-bottom:1.8rem;page-break-inside:avoid">'+prodHeader
+      +'<table width="100%" style="border-collapse:collapse;font-size:.8rem"><thead><tr>'
+      +'<th style="background:#1E0FA1;color:#fff;padding:.48rem .75rem;text-align:left;font-size:.65rem;letter-spacing:.08em;text-transform:uppercase">Cantidad</th>'
+      +'<th style="background:#1E0FA1;color:#fff;padding:.48rem .75rem;text-align:right;font-size:.65rem;letter-spacing:.08em;text-transform:uppercase">Precio unit. s/IVA</th>'
+      +'<th style="background:#1E0FA1;color:#fff;padding:.48rem .75rem;text-align:right;font-size:.65rem;letter-spacing:.08em;text-transform:uppercase">Subtotal s/IVA</th>'
+      +'<th style="background:#1E0FA1;color:#fff;padding:.48rem .75rem;text-align:right;font-size:.65rem;letter-spacing:.08em;text-transform:uppercase">Total + IVA '+iva+'%</th>'
+      +'</tr></thead><tbody>'+filas+'</tbody></table></div>';
   });
 
-  const nombresPrecios=[]; // ids de los campos de precio
-  const nombresSubs=[];    // ids de los campos de subtotal
+  // Nombre del archivo: Código + Proyecto
+  let tituloPDF='';
+  if(ref) tituloPDF+=ref;
+  if(proyecto && proyecto!=='Cotización'){ tituloPDF += (tituloPDF?' - ':'') + proyecto; }
+  if(!tituloPDF) tituloPDF='Cotizacion ' + cliente;
+  tituloPDF=tituloPDF.replace(/[\\/:*?"<>|]/g,'-');
 
-  lineas.forEach((ln,i)=>{
-    if(y<120){ page=doc.addPage([595,842]); y=800; }
-    const nombreCorto = ln.nombre.length>42 ? ln.nombre.slice(0,40)+'…' : ln.nombre;
-    page.drawText(nombreCorto, {x:48,y:y,size:8,font:font,color:rgb(0.1,0.1,0.1)});
-    page.drawText(String(ln.cant), {x:274,y:y,size:8,font:font,color:rgb(0.1,0.1,0.1)});
+  const cssStr=[
+    '*{margin:0;padding:0;box-sizing:border-box}',
+    'body{font-family:"DM Sans",sans-serif;background:#fff;color:#0A0820;padding:2.2rem 2.8rem;max-width:800px;margin:0 auto;font-size:.86rem}',
+    '.aviso{background:#fffbe6;border-left:3px solid #e8c840;padding:.7rem 1rem;font-size:.76rem;color:#7a6400;margin-bottom:1.6rem;line-height:1.6}',
+    '.hdr{display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:1.1rem;margin-bottom:1.8rem;border-bottom:2px solid #1E0FA1}',
+    '.logo-pdf{height:52px;width:auto}',
+    '.hdr-r{text-align:right;font-size:.76rem;color:#555;line-height:1.9}',
+    '.doc-title{font-family:"Bebas Neue",sans-serif;font-size:1.9rem;color:#0A0820;letter-spacing:.04em;margin-bottom:.18rem}',
+    '.doc-sub{font-size:.76rem;color:#888;margin-bottom:1.8rem}',
+    '.total-box{margin-top:1.4rem;border:2px solid #1E0FA1;max-width:340px;margin-left:auto}',
+    '.total-row{display:flex;justify-content:space-between;padding:.55rem 1rem;font-size:.84rem;border-bottom:1px solid #eee}',
+    '.total-row:last-child{border-bottom:none}',
+    '.total-final{background:#1E0FA1;color:#fff;font-weight:700;font-size:.96rem;letter-spacing:.03em}',
+    '.ftr{margin-top:1.8rem;padding-top:.9rem;border-top:1px solid #eee;display:flex;justify-content:space-between;font-size:.65rem;color:#bbb;letter-spacing:.08em}',
+    '.btn-p{display:block;margin:1.4rem auto 0;background:#1E0FA1;color:#fff;border:none;padding:.75rem 2rem;font-size:.8rem;letter-spacing:.12em;text-transform:uppercase;font-weight:700;cursor:pointer;font-family:inherit}',
+    '@media print{.aviso,.btn-p{display:none}body{padding:1.2rem 1.8rem}input{border:none!important;background:transparent!important;color:#0A0820!important;font-weight:700!important}}'
+  ].join('\n');
 
-    // Campo editable de PRECIO (resaltado)
-    const fPrecio = form.createTextField('precio_'+i);
-    fPrecio.setText(String(ln.precio));
-    fPrecio.addToPage(page, {x:326,y:y-4,width:90,height:14,
-      backgroundColor:highlight, borderColor:gold, borderWidth:0.8});
-    fPrecio.setFontSize(8);
-    nombresPrecios.push('precio_'+i);
+  const totalBox='<div class="total-box">'
+    +'<div class="total-row"><span>Subtotal s/IVA</span><span id="g_sub"></span></div>'
+    +'<div class="total-row"><span>IVA ('+iva+'%)</span><span id="g_iva"></span></div>'
+    +'<div class="total-row total-final"><span>TOTAL CON IVA</span><span id="g_tot"></span></div>'
+    +'</div>';
 
-    // Campo de SUBTOTAL (solo lectura, se calcula)
-    const fSub = form.createTextField('sub_'+i);
-    fSub.setText(String(ln.precio*ln.cant));
-    fSub.enableReadOnly();
-    fSub.addToPage(page, {x:446,y:y-4,width:100,height:14,
-      borderColor:rgb(0.85,0.85,0.85), borderWidth:0.5});
-    fSub.setFontSize(8);
-    nombresSubs.push('sub_'+i);
+  const scriptStr='(function(){'
+    +'var D='+JSON.stringify(D)+';'
+    +'var U=true;'
+    +'function fmt(n){return "$"+Math.round(n).toLocaleString("es-CO");}'
+    +'function recalc(){var gs=0,gt=0;D.forEach(function(d,i){'
+    +'var el=document.getElementById(d.id);if(!el)return;'
+    +'var cel=document.getElementById(d.cid);'
+    +'var v=parseFloat(el.value)||0;'
+    +'var cant=cel?(parseFloat(cel.value)||d.cant):d.cant;'
+    +'var sub=v*cant,tot=sub*(1+d.iva/100);gs+=sub;gt+=tot;'
+    +'var s=document.getElementById("sb_"+i);if(s)s.textContent=fmt(sub);'
+    +'var t=document.getElementById("tt_"+i);if(t)t.textContent=fmt(tot);'
+    +'});if(U){var e;'
+    +'e=document.getElementById("g_sub");if(e)e.textContent=fmt(gs);'
+    +'e=document.getElementById("g_iva");if(e)e.textContent=fmt(gt-gs);'
+    +'e=document.getElementById("g_tot");if(e)e.textContent=fmt(gt);}}'
+    +'window.recalc=recalc;window.onload=recalc;})();';
 
-    y-=22;
-  });
+  const htmlOut='<!DOCTYPE html><html><head><meta charset="UTF-8">'
+    +'<title>'+esc(tituloPDF)+'</title>'
+    +'<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">'
+    +'<style>'+cssStr+'</style></head><body>'
+    +'<div class="aviso">&#9998; <strong>Versión editable:</strong> Modifica la <strong>cantidad</strong> (campo gris) y/o el <strong>precio unitario</strong> (campo azul). Los totales se actualizan solos. Al terminar haz clic en <strong>Imprimir / Guardar PDF</strong>.</div>'
+    +'<div class="hdr">'
+    +'<img class="logo-pdf" src="'+LOGO_SRC+'" alt="Straza">'
+    +'<div class="hdr-r">'
+    +'<div><strong>Cliente:</strong> '+esc(cliente)+'</div>'
+    +(ref?'<div><strong>Código:</strong> '+esc(ref)+'</div>':'')
+    +'<div><strong>Fecha:</strong> '+fecha+'</div>'
+    +'<div><strong>Válida:</strong> '+esc(validez)+'</div>'
+    +'</div></div>'
+    +'<div class="doc-title">'+esc(proyecto)+'</div>'
+    +'<div class="doc-sub">'+window._prods.length+' producto(s) &middot; IVA '+iva+'%</div>'
+    +prodsHtml
+    +totalBox
+    +'<div class="ftr"><span>STRAZA &middot; THE INSIGHT OF SHOPPER MARKETING &middot; COLOMBIA</span><span>'+fecha+'</span></div>'
+    +'<button class="btn-p" onclick="window.print()">&#8595; Imprimir / Guardar PDF</button>'
+    +'<script>'+scriptStr+'<\/script>'
+    +'</body></html>';
 
-  y-=10;
-  // Campo TOTAL (solo lectura)
-  if(y<100){ page=doc.addPage([595,842]); y=800; }
-  page.drawRectangle({x:W-260,y:y-6,width:220,height:22,color:navy});
-  page.drawText('TOTAL con IVA', {x:W-252,y:y,size:9,font:fontBold,color:rgb(1,1,1)});
-  const fTotal = form.createTextField('total_final');
-  const totalIni = lineas.reduce((s,l)=>s+l.precio*l.cant,0)*(1+iva/100);
-  fTotal.setText(String(Math.round(totalIni)));
-  fTotal.enableReadOnly();
-  fTotal.addToPage(page, {x:W-150,y:y-4,width:105,height:14,
-    backgroundColor:rgb(0.118,0.059,0.631), borderWidth:0});
-  fTotal.setFontSize(9);
-
-  // JavaScript embebido: recalcula subtotales y total al cambiar un precio
-  const cantidades = lineas.map(l=>l.cant);
-  const jsRecalc =
-    'var cants=['+cantidades.join(',')+'];'+
-    'var iva='+iva+';'+
-    'var total=0;'+
-    'for(var i=0;i<cants.length;i++){'+
-    ' var pf=this.getField("precio_"+i);'+
-    ' var sf=this.getField("sub_"+i);'+
-    ' var precio=parseFloat(pf.value)||0;'+
-    ' var sub=Math.round(precio*cants[i]);'+
-    ' sf.value=String(sub);'+
-    ' total+=sub;'+
-    '}'+
-    'var tf=this.getField("total_final");'+
-    'tf.value=String(Math.round(total*(1+iva/100)));';
-
-  const { PDFName, PDFString } = window.PDFLib;
-
-  // A cada campo de precio le asignamos una accion de "Calculate" (AA/C)
-  nombresPrecios.forEach(nom=>{
-    const field = form.getField(nom);
-    const dictAcro = field.acroField.dict;
-    const jsAction = doc.context.obj({
-      S: PDFName.of('JavaScript'),
-      JS: PDFString.of(jsRecalc)
-    });
-    const aaDict = doc.context.obj({});
-    aaDict.set(PDFName.of('C'), jsAction);
-    dictAcro.set(PDFName.of('AA'), aaDict);
-  });
-
-  // Orden de calculo (CO): campos que disparan recalculo
-  const acroForm = form.acroForm;
-  const coArray = doc.context.obj(
-    nombresPrecios.map(nom=>form.getField(nom).acroField.ref)
-  );
-  acroForm.dict.set(PDFName.of('CO'), coArray);
-
-
-  const pdfBytes = await doc.save();
-  const blob = new Blob([pdfBytes], {type:'application/pdf'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  let baseNom = '';
-  if(ref) baseNom += ref;
-  if(proyecto && proyecto!=='Cotización'){ baseNom += (baseNom?' - ':'') + proyecto; }
-  if(!baseNom) baseNom = cliente;
-  a.href=url; a.download=(baseNom.replace(/[\\/:*?"<>|]/g,'-'))+' (editable).pdf';
-  a.click(); URL.revokeObjectURL(url);
-  showToast('PDF editable descargado ✓');
+  const win=window.open('','_blank');
+  win.document.write(htmlOut);
+  win.document.close();
+  showToast('PDF editable abierto en otra pestaña ✓');
 }
 
 // 2) Lista de materiales para compras (si el proyecto se aprueba)
