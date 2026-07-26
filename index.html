@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- saved from url=(0062)file:///C:/Users/Usuario/Downloads/straza-cotizador-v4_52.html -->
+<!-- saved from url=(0062)file:///C:/Users/Usuario/Downloads/straza-cotizador-v4_53.html -->
 <html lang="es"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -276,6 +276,14 @@ tr:hover td{background:rgba(255,255,255,.02)}
   padding:.65rem;font-weight:600;font-size:.74rem;letter-spacing:.1em;text-transform:uppercase;
   width:100%;display:block;margin-top:.45rem;transition:all .2s}
 .btn-email:hover{background:rgba(232,200,64,.08);border-color:var(--gold)}
+.btn-exp-xls{background:transparent;color:#3fd18b;border:1px solid rgba(63,209,139,.4);
+  padding:.65rem;font-weight:600;font-size:.74rem;letter-spacing:.1em;text-transform:uppercase;
+  width:100%;display:block;margin-top:.45rem;transition:all .2s}
+.btn-exp-xls:hover{background:rgba(63,209,139,.08);border-color:#3fd18b}
+.btn-compras{background:transparent;color:#5b9bd5;border:1px solid rgba(91,155,213,.4);
+  padding:.65rem;font-weight:600;font-size:.74rem;letter-spacing:.1em;text-transform:uppercase;
+  width:100%;display:block;margin-top:.45rem;transition:all .2s}
+.btn-compras:hover{background:rgba(91,155,213,.08);border-color:#5b9bd5}
 .btn-clr{background:transparent;color:var(--mid);border:1px solid var(--border2);padding:.62rem;
   font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;width:100%;margin-top:.45rem;transition:border-color .2s}
 .btn-clr:hover{border-color:var(--mid)}
@@ -441,7 +449,9 @@ tr:hover td{background:rgba(255,255,255,.02)}
       <div id="costos-cat-body"></div>
     </div>
     <button class="btn-exp" onclick="exportar()">↓ Exportar cotizacion PDF</button>
+    <button class="btn-exp-xls" onclick="exportarCotizacionExcel()">↓ Exportar cotizacion editable (Excel)</button>
     <button class="btn-email" onclick="enviarEmail()">✉ Enviar por correo</button>
+    <button class="btn-compras" onclick="exportarMaterialesCompras()">🛒 Lista de materiales para compras (Excel)</button>
     <button class="btn-clr" onclick="resetCot()">Limpiar cotizacion</button>
   </div>
 </div>
@@ -1301,8 +1311,16 @@ function exportar(){
     '@media print{body{padding:1.2rem 1.8rem}}'
   ].join('\n');
 
+  // Nombre del archivo PDF: Código + Proyecto (el código ya trae la versión si aplica, ej: SV12400-V3)
+  let tituloPDF = '';
+  if(ref) tituloPDF += ref;
+  if(proyecto && proyecto!=='Cotización'){ tituloPDF += (tituloPDF?' - ':'') + proyecto; }
+  if(!tituloPDF) tituloPDF = 'Cotizacion ' + cliente;
+  // Limpiar caracteres que no sirven en nombres de archivo
+  tituloPDF = tituloPDF.replace(/[\\/:*?"<>|]/g,'-');
+
   const htmlOut='<!DOCTYPE html><html><head><meta charset="UTF-8">'
-    +'<title>Cotizacion '+esc(cliente)+'</title>'
+    +'<title>'+esc(tituloPDF)+'</title>'
     +'<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">'
     +'<style>'+cssStr+'</style></head><body>'
     +'<div class="hdr">'
@@ -1416,6 +1434,151 @@ function importarRespaldo(input){
 
 function cop(n){ return n?'$'+Math.round(n).toLocaleString('es-CO'):'$0'; }
 function cf(n){ return '$'+Math.round(n).toLocaleString('es-CO'); }
+
+// ── EXPORTACIÓN A EXCEL (CSV con BOM para acentos, editable en Excel) ──
+function descargarCSV(filas, nombre){
+  // filas = array de arrays. Se escapan comillas y se envuelve en comillas cada celda.
+  const csv = filas.map(fila =>
+    fila.map(celda => {
+      let v = (celda===null||celda===undefined) ? '' : String(celda);
+      v = v.replace(/"/g,'""');
+      return '"'+v+'"';
+    }).join(';')  // punto y coma: Excel en español lo separa en columnas
+  ).join('\r\n');
+  const BOM = '\uFEFF'; // para que Excel muestre acentos
+  const blob = new Blob([BOM+csv], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = nombre;
+  a.click(); URL.revokeObjectURL(url);
+}
+
+// 1) Cotización editable: productos, cantidades, precios (se pueden cambiar en Excel)
+function exportarCotizacionExcel(){
+  if(!window._prods.length){ showToast('No hay productos en la cotización'); return; }
+  const cliente=document.getElementById('cot-cliente').value.trim()||'Cliente';
+  const ref=document.getElementById('cot-ref').value.trim();
+  const proyecto=document.getElementById('cot-proyecto').value.trim()||'Cotización';
+  const iva=parseFloat(document.getElementById('cot-iva').value)||19;
+  const fecha=new Date().toLocaleDateString('es-CO');
+
+  const filas=[];
+  filas.push(['STRAZA — Cotización editable']);
+  filas.push(['Cliente',cliente]);
+  filas.push(['Referencia',ref]);
+  filas.push(['Proyecto',proyecto]);
+  filas.push(['Fecha',fecha]);
+  filas.push(['IVA %',iva]);
+  filas.push([]);
+  filas.push(['Producto','Cantidad','Precio unitario','Subtotal','Total con IVA']);
+
+  let grandSub=0, grandTot=0;
+  window._prods.forEach(p=>{
+    const cu=calcCostoUnit(p);
+    p.cantidades.filter(e=>e.cant>0).forEach(entry=>{
+      const vu=calcVenta(cu,entry.margen||0);
+      const sub=vu*entry.cant;
+      const tot=sub*(1+iva/100);
+      grandSub+=sub; grandTot+=tot;
+      // Precios como números (sin símbolo) para que sean editables y recalculables en Excel
+      filas.push([p.nombre, entry.cant, Math.round(vu), Math.round(sub), Math.round(tot)]);
+    });
+  });
+  filas.push([]);
+  filas.push(['','','TOTAL Subtotal',Math.round(grandSub),'']);
+  filas.push(['','','TOTAL con IVA','',Math.round(grandTot)]);
+  filas.push([]);
+  filas.push(['Nota: Los precios están sin formato para que puedas editarlos y recalcular en Excel.']);
+
+  let baseNom = '';
+  if(ref) baseNom += ref;
+  if(proyecto && proyecto!=='Cotización'){ baseNom += (baseNom?'_':'') + proyecto; }
+  if(!baseNom) baseNom = cliente;
+  const nombreArch='Cotizacion_'+baseNom.replace(/[^a-zA-Z0-9]/g,'_')+'.csv';
+  descargarCSV(filas, nombreArch);
+  showToast('Cotización exportada a Excel ✓');
+}
+
+// 2) Lista de materiales para compras (si el proyecto se aprueba)
+function exportarMaterialesCompras(){
+  if(!window._prods.length){ showToast('No hay productos en la cotización'); return; }
+  const cliente=document.getElementById('cot-cliente').value.trim()||'Cliente';
+  const ref=document.getElementById('cot-ref').value.trim();
+  const proyecto=document.getElementById('cot-proyecto').value.trim()||'Proyecto';
+  const fecha=new Date().toLocaleDateString('es-CO');
+
+  // Acumular materiales × cantidades del proyecto
+  // Para cada producto: consumo del material × suma de cantidades cotizadas
+  const acum={}; // matId -> {nombre, unidad, cat, precio, cantidadTotal}
+  window._prods.forEach(p=>{
+    const totalCant=p.cantidades.filter(e=>e.cant>0).reduce((s,e)=>s+e.cant,0);
+    if(!totalCant) return;
+    p.items.forEach(it=>{
+      const m=getMat(it.matId); if(!m) return;
+      const consumoTotal=(it.consumo||0)*totalCant;
+      if(!acum[m.id]){
+        acum[m.id]={nombre:m.nombre,unidad:m.unidad||'',cat:m.cat,precio:m.precio||0,cantidad:0};
+      }
+      acum[m.id].cantidad+=consumoTotal;
+    });
+  });
+
+  const ids=Object.keys(acum);
+  if(!ids.length){ showToast('No hay materiales en los productos'); return; }
+
+  const filas=[];
+  filas.push(['STRAZA — Lista de materiales para compras']);
+  filas.push(['Cliente',cliente]);
+  filas.push(['Referencia',ref]);
+  filas.push(['Proyecto',proyecto]);
+  filas.push(['Fecha',fecha]);
+  filas.push([]);
+  filas.push(['Material','Categoría','Cantidad total','Unidad','Precio unitario','Costo total','Proveedor']);
+
+  // Ordenar por categoría
+  ids.sort((a,b)=>{
+    const ca=acum[a].cat||'', cb=acum[b].cat||'';
+    if(ca!==cb) return ca.localeCompare(cb);
+    return acum[a].nombre.localeCompare(acum[b].nombre);
+  });
+
+  const totalPorCat={};
+  let granTotal=0;
+  ids.forEach(id=>{
+    const m=acum[id];
+    const costoTotal=m.cantidad*m.precio;
+    const catLabel=CAT_LABELS[m.cat]||m.cat||'Otros';
+    if(!totalPorCat[catLabel]) totalPorCat[catLabel]=0;
+    totalPorCat[catLabel]+=costoTotal;
+    granTotal+=costoTotal;
+    filas.push([
+      m.nombre,
+      catLabel,
+      Math.round(m.cantidad*100)/100,
+      m.unidad,
+      Math.round(m.precio),
+      Math.round(costoTotal),
+      '' // Proveedor: columna vacía para llenar en compras
+    ]);
+  });
+
+  // Totales por categoría
+  filas.push([]);
+  filas.push(['TOTALES POR CATEGORÍA']);
+  Object.keys(totalPorCat).sort((a,b)=>totalPorCat[b]-totalPorCat[a]).forEach(cat=>{
+    filas.push([cat,'','','','',Math.round(totalPorCat[cat]),'']);
+  });
+  filas.push([]);
+  filas.push(['TOTAL GENERAL','','','','',Math.round(granTotal),'']);
+
+  let baseNomC = '';
+  if(ref) baseNomC += ref;
+  if(proyecto && proyecto!=='Proyecto'){ baseNomC += (baseNomC?'_':'') + proyecto; }
+  if(!baseNomC) baseNomC = cliente;
+  const nombreArch='Materiales_Compras_'+baseNomC.replace(/[^a-zA-Z0-9]/g,'_')+'.csv';
+  descargarCSV(filas, nombreArch);
+  showToast('Lista de materiales exportada ✓');
+}
 function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
 // INIT
