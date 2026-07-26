@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- saved from url=(0062)file:///C:/Users/Usuario/Downloads/straza-cotizador-v4_49.html -->
+<!-- saved from url=(0062)file:///C:/Users/Usuario/Downloads/straza-cotizador-v4_51.html -->
 <html lang="es"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -229,6 +229,11 @@ tr:hover td{background:rgba(255,255,255,.02)}
 .btn-del-prod{background:rgba(255,77,46,.08);border:1px solid rgba(255,77,46,.2);color:var(--coral);
   font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;padding:.32rem .8rem;transition:all .2s}
 .btn-del-prod:hover{background:rgba(255,77,46,.2)}
+.prod-acciones{display:flex;align-items:center;gap:.4rem;margin-left:auto}
+.btn-mover{background:rgba(255,255,255,.05);border:1px solid var(--border);color:var(--txt);width:28px;height:28px;border-radius:6px;font-size:.9rem;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;padding:0}
+.btn-mover:hover{background:rgba(232,200,64,.15);border-color:var(--gold)}
+.btn-dup-prod{background:rgba(232,200,64,.08);border:1px solid rgba(232,200,64,.25);color:var(--gold);width:28px;height:28px;border-radius:6px;font-size:.85rem;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;padding:0}
+.btn-dup-prod:hover{background:rgba(232,200,64,.2);border-color:var(--gold)}
 .prod-costs{font-size:.73rem;color:var(--dim);display:flex;gap:.9rem}
 .prod-costs strong{color:var(--white)}
 .prod-costs .venta{color:var(--gold)}
@@ -747,11 +752,17 @@ async function nubeSubirMateriales(){
 }
 
 // Sincronización silenciosa de UNA cotización al guardar (best-effort)
+let _cotSyncTimer=null;
 function nubeSyncCotizacion(cot){
   if(!nubeGetURL()) return;
-  nubeSubirUnaCotizacion(cot)
-    .then(ok=>{ if(ok) nubeSetEstado('on','Guardado en nube ✓'); })
-    .catch(()=>{ /* queda local; se subirá manualmente */ });
+  // Esperar a que el usuario deje de escribir antes de subir (evita acumular peticiones)
+  clearTimeout(_cotSyncTimer);
+  const copia=JSON.parse(JSON.stringify(cot));
+  _cotSyncTimer=setTimeout(()=>{
+    nubeSubirUnaCotizacion(copia)
+      .then(ok=>{ if(ok) nubeSetEstado('on','Guardado en nube ✓'); })
+      .catch(()=>{ /* queda local; se subirá manualmente */ });
+  }, 3500);
 }
 
 // Sincronización silenciosa de materiales al editarlos
@@ -869,7 +880,6 @@ function cargarCotEnForm(cot){
 
 function guardarCotizacion(){
   if(!cotActual) return;
-  setAutosaveStatus('saving','Guardando…');
   cotActual.cliente=document.getElementById('cot-cliente').value.trim();
   cotActual.ref=document.getElementById('cot-ref').value.trim();
   cotActual.proyecto=document.getElementById('cot-proyecto').value.trim();
@@ -881,13 +891,15 @@ function guardarCotizacion(){
   const lista=loadCotizaciones(); const idx=lista.findIndex(c=>c.id===cotActual.id);
   if(idx>=0) lista[idx]=cotActual; else lista.push(cotActual);
   saveCotizaciones(lista);
-  nubeSyncCotizacion(cotActual);
+  // Guardado local LISTO — confirmar de inmediato (no esperar a la nube)
   const btn=document.getElementById('btn-guardar');
   btn.textContent='✓ Guardado'; btn.classList.add('saved');
   setTimeout(()=>{ btn.textContent='💾 Guardar'; btn.classList.remove('saved'); },2000);
   const ahora=new Date(); const hhmm=ahora.getHours().toString().padStart(2,'0')+':'+ahora.getMinutes().toString().padStart(2,'0');
   setAutosaveStatus('ok','Guardado '+hhmm);
   document.getElementById('cot-topbar-title').textContent=cotActual.cliente||'Nueva Cotización';
+  // Sincronizar con la nube en segundo plano (sin bloquear, sin afectar el indicador)
+  nubeSyncCotizacion(cotActual);
 }
 
 function setAutosaveStatus(estado,texto){
@@ -955,6 +967,28 @@ function addProducto(){
 }
 function delProducto(pid){ window._prods=window._prods.filter(p=>p.id!==pid); renderProductos(); renderPreview(); }
 
+function duplicarProducto(pid){
+  const i=window._prods.findIndex(p=>p.id===pid);
+  if(i<0) return;
+  prodIdC++;
+  const copia=JSON.parse(JSON.stringify(window._prods[i]));
+  copia.id='p'+prodIdC;
+  copia.nombre=(copia.nombre||'Producto')+' (copia)';
+  window._prods.splice(i+1,0,copia); // insertar justo debajo del original
+  renderProductos(); renderPreview();
+  if(cotActual) guardarCotizacion();
+}
+
+function moverProducto(pid,dir){
+  const i=window._prods.findIndex(p=>p.id===pid);
+  if(i<0) return;
+  const j=i+dir;
+  if(j<0||j>=window._prods.length) return; // ya está en el extremo
+  const tmp=window._prods[i]; window._prods[i]=window._prods[j]; window._prods[j]=tmp;
+  renderProductos(); renderPreview();
+  if(cotActual) guardarCotizacion();
+}
+
 function getMat(id){ return materiales.find(m=>m.id===id); }
 function calcItem(it){ const m=getMat(it.matId); return m?(it.consumo||0)*m.precio:0; }
 function calcCostoUnit(p){
@@ -1008,7 +1042,12 @@ function renderProductos(){
       '<div class="prod-head">'
       +'<span class="prod-num">'+String(idx+1).padStart(2,'0')+'</span>'
       +'<input class="prod-name-inp" value="'+esc(p.nombre)+'" placeholder="Nombre del producto" oninput="pSet(\''+p.id+'\',\'nombre\',this.value,false)" onblur="renderProductos()">'
+      +'<div class="prod-acciones">'
+      +'<button class="btn-mover" onclick="moverProducto(\''+p.id+'\',-1)" title="Subir">↑</button>'
+      +'<button class="btn-mover" onclick="moverProducto(\''+p.id+'\',1)" title="Bajar">↓</button>'
+      +'<button class="btn-dup-prod" onclick="duplicarProducto(\''+p.id+'\')" title="Duplicar producto">⎘</button>'
       +'<button class="btn-del-prod" onclick="delProducto(\''+p.id+'\')">Eliminar</button>'
+      +'</div>'
       +'</div>'
       +'<div class="prod-body">'
       +'<div class="foto-desc-row">'
