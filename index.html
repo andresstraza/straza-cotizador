@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- saved from url=(0062)file:///C:/Users/Usuario/Downloads/straza-cotizador-v4_55.html -->
+<!-- saved from url=(0062)file:///C:/Users/Usuario/Downloads/straza-cotizador-v4_56.html -->
 <html lang="es"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -1570,10 +1570,15 @@ function exportarPDFeditable(){
     +'<script>'+scriptStr+'<\/script>'
     +'</body></html>';
 
-  const win=window.open('','_blank');
-  win.document.write(htmlOut);
-  win.document.close();
-  showToast('PDF editable abierto en otra pestaña ✓');
+  // Descargar como archivo HTML editable (para enviar al ejecutivo de cuenta)
+  const blob=new Blob([htmlOut],{type:'text/html;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download=tituloPDF+' (editable).html';
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('Cotización editable descargada ✓');
 }
 
 // 2) Lista de materiales para compras (si el proyecto se aprueba)
