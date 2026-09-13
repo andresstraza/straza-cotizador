@@ -711,7 +711,7 @@ async function liberarEspacio(){
   if(!confirm('Se van a borrar de ESTE navegador las cotizaciones que ya estén respaldadas en la nube (no se pierden, siguen ahí). ¿Continuar?')) return;
   showToast('Revisando qué hay en la nube...');
   try{
-    const r = await nubeCall({action:'getCotizaciones'});
+    const r = await nubeCall({action:'getCotizaciones'}, 60000);
     if(!(r && r.ok && Array.isArray(r.cotizaciones))){ showToast('No se pudo conectar con la nube'); return; }
     const nube={}; r.cotizaciones.forEach(function(c){ nube[c.id]=c.updatedAt||0; });
     const local=loadCotizaciones();
