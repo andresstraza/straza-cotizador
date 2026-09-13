@@ -1080,35 +1080,38 @@ function guardarCotizacion(){
   const resultado=saveCotizaciones(lista);
 
   if(resultado!==true){
-    // EL GUARDADO FALLÓ. Antes esto se escondía y la cotización se quedaba a medias
-    // sin avisar a nadie. Ahora se avisa de inmediato y NO se dice "Guardado".
-    setAutosaveStatus('error','⚠ NO se guardó — sin espacio');
+    // EL GUARDADO LOCAL FALLÓ (sin espacio). Antes esto se escondía y la cotización
+    // se quedaba a medias sin avisar a nadie. Ahora se avisa de inmediato.
+    // IMPORTANTE: aunque el guardado LOCAL falle, la nube es independiente del
+    // espacio de este navegador — igual intentamos subir la cotización a la nube
+    // más abajo, para no perder el trabajo mientras se libera espacio.
+    setAutosaveStatus('error','⚠ NO se guardó local — sin espacio');
     const btn=document.getElementById('btn-guardar');
-    btn.textContent='⚠ Error al guardar'; btn.classList.remove('saved');
-    // Evitar bombardear con ventanas de alerta si el guardado sigue fallando repetidamente
+    btn.textContent='⚠ Error al guardar local'; btn.classList.remove('saved');
     const ahoraMs=Date.now();
     if(!window._ultimoAvisoError || (ahoraMs-window._ultimoAvisoError)>15000){
       window._ultimoAvisoError=ahoraMs;
       if(resultado.error==='sin-espacio'){
-        alert('⚠ ATENCIÓN: No se pudo guardar la cotización.\n\n'+
+        alert('⚠ ATENCIÓN: No se pudo guardar la cotización EN ESTE NAVEGADOR.\n\n'+
           'El navegador se quedó SIN ESPACIO para guardar más datos (esto pasa cuando se acumulan muchas fotos de cotizaciones anteriores).\n\n'+
-          'TUS DATOS EN PANTALLA SIGUEN AQUÍ, no se han perdido. Pero no se van a guardar hasta liberar espacio.\n\n'+
-          'Ve a la pestaña ☁ Nube y usa el botón "🧹 Liberar espacio" para borrar del navegador las cotizaciones ya respaldadas en la nube (no se pierden, siguen ahí).');
+          'TUS DATOS EN PANTALLA SIGUEN AQUÍ, no se han perdido, y se está intentando subir a la nube ahora mismo.\n\n'+
+          'Ve a la pestaña ☁ Nube y usa el botón "🧹 Liberar espacio" para borrar del navegador las cotizaciones ya respaldadas (no se pierden, siguen en la nube).');
       } else {
-        alert('⚠ ATENCIÓN: Hubo un problema al guardar la cotización. Tus datos en pantalla siguen aquí, pero no se guardaron. Avisa a soporte con este mensaje:\n\n'+resultado.detalle);
+        alert('⚠ ATENCIÓN: Hubo un problema al guardar la cotización localmente. Tus datos en pantalla siguen aquí. Avisa a soporte con este mensaje:\n\n'+resultado.detalle);
       }
     }
-    return; // No mentir diciendo "Guardado" ni sincronizar a la nube una cotización que no se guardó
+    // NO hacemos "return" aquí: seguimos abajo para intentar subir a la nube igual.
+  } else {
+    // Guardado local LISTO — confirmar de inmediato (no esperar a la nube)
+    const btn=document.getElementById('btn-guardar');
+    btn.textContent='✓ Guardado'; btn.classList.add('saved');
+    setTimeout(()=>{ btn.textContent='💾 Guardar'; btn.classList.remove('saved'); },2000);
+    const ahora=new Date(); const hhmm=ahora.getHours().toString().padStart(2,'0')+':'+ahora.getMinutes().toString().padStart(2,'0');
+    setAutosaveStatus('ok','Guardado '+hhmm);
+    document.getElementById('cot-topbar-title').textContent=cotActual.cliente||'Nueva Cotización';
   }
-
-  // Guardado local LISTO — confirmar de inmediato (no esperar a la nube)
-  const btn=document.getElementById('btn-guardar');
-  btn.textContent='✓ Guardado'; btn.classList.add('saved');
-  setTimeout(()=>{ btn.textContent='💾 Guardar'; btn.classList.remove('saved'); },2000);
-  const ahora=new Date(); const hhmm=ahora.getHours().toString().padStart(2,'0')+':'+ahora.getMinutes().toString().padStart(2,'0');
-  setAutosaveStatus('ok','Guardado '+hhmm);
-  document.getElementById('cot-topbar-title').textContent=cotActual.cliente||'Nueva Cotización';
-  // Sincronizar con la nube en segundo plano (sin bloquear, sin afectar el indicador)
+  // Sincronizar con la nube en segundo plano SIEMPRE, sin importar si el guardado
+  // local tuvo espacio o no — la nube no depende del espacio de este navegador.
   nubeSyncCotizacion(cotActual);
 }
 
