@@ -715,13 +715,26 @@ async function liberarEspacio(){
     if(!(r && r.ok && Array.isArray(r.cotizaciones))){ showToast('No se pudo conectar con la nube'); return; }
     const nube={}; r.cotizaciones.forEach(function(c){ nube[c.id]=c.updatedAt||0; });
     const local=loadCotizaciones();
-    const conservar=[]; let borradas=0;
+    const conservar=[]; let borradas=0; let coincidenId=0;
     local.forEach(function(c){
       const enNube=nube[c.id];
-      if(enNube!==undefined && enNube>=(c.updatedAt||0)){ borradas++; }
-      else{ conservar.push(c); }
+      if(enNube!==undefined){
+        coincidenId++;
+        if(enNube>=(c.updatedAt||0)){ borradas++; return; }
+      }
+      conservar.push(c);
     });
-    if(!borradas){ showToast('No hay nada seguro para liberar todavía'); return; }
+    if(!borradas){
+      // Diagnóstico detallado: por qué no hay nada seguro para liberar
+      alert('No se liberó nada. Detalle para revisar:\n\n'+
+        'Cotizaciones en este navegador: '+local.length+'\n'+
+        'Cotizaciones en la nube: '+r.cotizaciones.length+'\n'+
+        'Coinciden por código (mismo id): '+coincidenId+'\n\n'+
+        (coincidenId===0
+          ? 'Ninguna coincide por id — parecen ser cotizaciones distintas entre este navegador y la nube.'
+          : 'Coinciden por id, pero la versión local es más nueva que la de la nube (o la fecha no se registró igual). No se libera nada para no perder cambios recientes.'));
+      return;
+    }
     const resultado=saveCotizaciones(conservar);
     if(resultado!==true){ showToast('No se pudo liberar espacio (siguió sin caber)'); return; }
     renderHistorial();
@@ -816,9 +829,22 @@ async function nubeSubirMaterialesLotes(){
 }
 
 // Traer TODO de la nube a este equipo
+// Combina la lista local con la de la nube: la nube manda para todo lo que ya
+// tiene, PERO nunca borra una cotización que solo exista localmente o que sea
+// más reciente aquí que en la nube (para no perder ediciones sin sincronizar).
+function mezclarCotizaciones(localList, nubeList){
+  const porId={};
+  (nubeList||[]).forEach(function(c){ porId[c.id]=c; });
+  (localList||[]).forEach(function(c){
+    const enNube=porId[c.id];
+    if(!enNube || (c.updatedAt||0) > (enNube.updatedAt||0)){ porId[c.id]=c; }
+  });
+  return Object.keys(porId).map(function(id){ return porId[id]; });
+}
+
 async function nubeBajarTodo(){
   if(!nubeGetURL()){ showToast('Primero conecta la URL'); return; }
-  if(!confirm('Esto reemplazará las cotizaciones y materiales de ESTE equipo con los de la nube. ¿Continuar?')) return;
+  if(!confirm('Esto trae las cotizaciones y materiales de la nube y los combina con lo que ya tienes aquí (no borra nada que no esté ya respaldado en la nube). ¿Continuar?')) return;
   nubeSetEstado('sync','Descargando...');
   showToast('Descargando... puede tardar un poco si hay muchas cotizaciones con fotos');
   try{
@@ -829,10 +855,12 @@ async function nubeBajarTodo(){
         materiales = loadMateriales();
       }
       if(Array.isArray(r.cotizaciones)){
-        // Guardar livianas (sin fotos) desde el principio — las fotos se
-        // recuperan solas de la nube cuando se abre cada cotización.
-        // Esto evita llenar el espacio del navegador de golpe al traer todo.
-        const cotsLivianas = r.cotizaciones.map(function(c){
+        // Combinar con lo local (nunca perder algo que solo esté aquí) y
+        // guardar livianas (sin fotos pesadas) — las fotos se recuperan solas
+        // de la nube cuando se abre cada cotización.
+        const localActual = loadCotizaciones();
+        const combinadas = mezclarCotizaciones(localActual, r.cotizaciones);
+        const cotsLivianas = combinadas.map(function(c){
           const copia=Object.assign({},c);
           copia.productos=aligerarProductos(copia.productos);
           return copia;
@@ -900,7 +928,11 @@ function nubeSyncCotizacion(cot){
 function aligerarProductos(productos){
   return (productos||[]).map(function(p){
     const copia=Object.assign({},p);
-    if(copia.foto){ copia._fotoEnNube=true; copia.foto=null; }
+    // Solo aligerar fotos "pesadas" (texto base64). Los enlaces a Drive (http...)
+    // ya son livianos de por sí, no hace falta quitarlos ni recuperarlos después.
+    if(copia.foto && typeof copia.foto==='string' && copia.foto.indexOf('data:')===0){
+      copia._fotoEnNube=true; copia.foto=null;
+    }
     return copia;
   });
 }
@@ -1310,10 +1342,40 @@ function loadFoto(pid,inp){
   r.onload=function(e){
     comprimirImagen(e.target.result, 900, 0.72).then(function(fotoComprimida){
       const p=window._prods.find(x=>x.id===pid);
-      if(p){ p.foto=fotoComprimida; renderProductos(); if(cotActual) guardarCotizacion(); }
+      if(!p) return;
+      // Vista previa instantánea mientras se sube a Drive en segundo plano
+      p.foto=fotoComprimida;
+      renderProductos();
+      if(cotActual) guardarCotizacion();
+      if(nubeGetURL()){
+        showToast('Subiendo foto...');
+        subirFotoADrive(fotoComprimida, pid).then(function(url){
+          const p2=window._prods.find(x=>x.id===pid);
+          if(p2 && url){
+            p2.foto=url; // reemplaza el texto pesado por un enlace liviano
+            renderProductos();
+            if(cotActual) guardarCotizacion();
+            showToast('Foto subida ✓');
+          } else if(p2){
+            showToast('No se pudo subir la foto a Drive — se quedó guardada localmente');
+          }
+        });
+      }
     });
   };
   r.readAsDataURL(inp.files[0]);
+}
+
+// Sube una foto comprimida a Google Drive vía el Apps Script y devuelve el enlace
+// público a la imagen (mucho más liviano que guardar el texto de la foto).
+async function subirFotoADrive(base64, pid){
+  try{
+    const nombre='foto_'+pid+'_'+Date.now();
+    const r=await nubeCallPost('guardarFotoDrive', { imagenBase64: base64, nombre: nombre });
+    return (r && r.ok && r.url) ? r.url : null;
+  }catch(e){
+    return null;
+  }
 }
 
 // Redimensiona y comprime una imagen (base64) para que ocupe mucho menos espacio.
