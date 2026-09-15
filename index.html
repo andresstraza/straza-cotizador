@@ -506,9 +506,9 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <div class="nube-label" style="margin-bottom:.6rem">Espacio en este navegador</div>
     <div class="nube-sync-info" id="espacio-info">Calculando...</div>
     <div class="nube-btns nube-btns-col" style="margin-top:.6rem">
-      <button class="btn-backup nube-accion" onclick="liberarEspacio()">&#129529; Liberar espacio (borra del navegador lo ya respaldado en la nube)</button>
+      <button class="btn-backup nube-accion" onclick="liberarEspacio()">&#129529; Liberar espacio (aligera lo ya respaldado en la nube)</button>
     </div>
-    <div class="nube-help">Esto NO borra tus cotizaciones — solo las quita de este navegador para hacer espacio. Siguen a salvo en la nube y las puedes volver a traer cuando quieras con "Traer datos de la nube".</div>
+    <div class="nube-help">Esto NO borra tus cotizaciones — siguen visibles en el Historial. Solo deja el resumen aquí (nombre, código y fecha) y trae el contenido completo solo cuando abres una. Así el navegador nunca se llena.</div>
   </div>
 
   <div class="nube-card">
@@ -533,6 +533,11 @@ const UNIDADES_EXTRA = ['UND','ML','M2','M²','H/H','KG','LT','PAR','NA','HORA',
 
 let materiales = loadMateriales();
 let cotActual = null;
+// Cuántas cotizaciones COMPLETAS (con todos sus productos) se guardan a la vez
+// en este navegador. Las demás quedan solo con su nombre/código/fecha (para
+// que sigan viéndose en el Historial) y se completan solas al abrirlas.
+// Así el navegador NUNCA se llena, sin importar cuántas cotizaciones existan.
+const MAX_CACHE_FULL = 20;
 let prodIdC = 0;
 let matIdC = Math.max(500, materiales.reduce((mx,m)=>{ const n=parseInt((m.id||'').replace('m',''))||0; return Math.max(mx,n); },500));
 let filtroActual = 'all';
@@ -708,38 +713,42 @@ function mostrarEspacioUsado(){
 // recientes) en la nube. Nunca borra algo que no esté seguro en la nube primero.
 async function liberarEspacio(){
   if(!nubeGetURL()){ showToast('Primero conecta la nube en esta pestaña para poder liberar espacio de forma segura'); return; }
-  if(!confirm('Se van a borrar de ESTE navegador las cotizaciones que ya estén respaldadas en la nube (no se pierden, siguen ahí). ¿Continuar?')) return;
+  if(!confirm('Se van a aligerar (dejar solo el resumen: nombre, código y fecha) las cotizaciones de ESTE navegador que ya estén respaldadas en la nube. Siguen visibles en el Historial y se completan solas al abrirlas — no se pierden. ¿Continuar?')) return;
   showToast('Revisando qué hay en la nube...');
   try{
-    const r = await nubeCall({action:'getCotizaciones'}, 60000);
-    if(!(r && r.ok && Array.isArray(r.cotizaciones))){ showToast('No se pudo conectar con la nube'); return; }
-    const nube={}; r.cotizaciones.forEach(function(c){ nube[c.id]=c.updatedAt||0; });
+    const r = await nubeCall({action:'getListaCotizaciones'}, 30000);
+    if(!(r && r.ok && Array.isArray(r.lista))){ showToast('No se pudo conectar con la nube'); return; }
+    const nube={}; r.lista.forEach(function(c){ nube[c.id]=c.updatedAt||0; });
     const local=loadCotizaciones();
-    const conservar=[]; let borradas=0; let coincidenId=0;
-    local.forEach(function(c){
+    let aligeradas=0; let coincidenId=0;
+    const resultadoLista=local.map(function(c){
       const enNube=nube[c.id];
       if(enNube!==undefined){
         coincidenId++;
-        if(enNube>=(c.updatedAt||0)){ borradas++; return; }
+        if(enNube>=(c.updatedAt||0) && Array.isArray(c.productos) && !c._completoEnNube){
+          aligeradas++;
+          return { id:c.id, ref:c.ref, cliente:c.cliente, proyecto:c.proyecto,
+                   updatedAt:c.updatedAt, _completoEnNube:true };
+        }
       }
-      conservar.push(c);
+      return c;
     });
-    if(!borradas){
+    if(!aligeradas){
       // Diagnóstico detallado: por qué no hay nada seguro para liberar
       alert('No se liberó nada. Detalle para revisar:\n\n'+
         'Cotizaciones en este navegador: '+local.length+'\n'+
-        'Cotizaciones en la nube: '+r.cotizaciones.length+'\n'+
+        'Cotizaciones en la nube: '+r.lista.length+'\n'+
         'Coinciden por código (mismo id): '+coincidenId+'\n\n'+
         (coincidenId===0
           ? 'Ninguna coincide por id — parecen ser cotizaciones distintas entre este navegador y la nube.'
-          : 'Coinciden por id, pero la versión local es más nueva que la de la nube (o la fecha no se registró igual). No se libera nada para no perder cambios recientes.'));
+          : 'Coinciden por id, pero ya estaban livianas o la versión local es más nueva que la de la nube. No se libera nada para no perder cambios recientes.'));
       return;
     }
-    const resultado=saveCotizaciones(conservar);
+    const resultado=saveCotizaciones(resultadoLista);
     if(resultado!==true){ showToast('No se pudo liberar espacio (siguió sin caber)'); return; }
     renderHistorial();
     mostrarEspacioUsado();
-    showToast(borradas+' cotización(es) liberadas de este navegador (siguen en la nube) ✓');
+    showToast(aligeradas+' cotización(es) aligeradas — siguen visibles, se abren completas al hacer clic ✓');
   }catch(e){
     showToast('Error al conectar con la nube para liberar espacio');
   }
@@ -844,46 +853,52 @@ function mezclarCotizaciones(localList, nubeList){
 
 async function nubeBajarTodo(){
   if(!nubeGetURL()){ showToast('Primero conecta la URL'); return; }
-  if(!confirm('Esto trae las cotizaciones y materiales de la nube y los combina con lo que ya tienes aquí (no borra nada que no esté ya respaldado en la nube). ¿Continuar?')) return;
+  if(!confirm('Esto trae el listado de cotizaciones y los materiales de la nube y los combina con lo que ya tienes aquí (no borra nada que no esté ya respaldado en la nube). ¿Continuar?')) return;
   nubeSetEstado('sync','Descargando...');
-  showToast('Descargando... puede tardar un poco si hay muchas cotizaciones con fotos');
+  showToast('Descargando lista desde la nube...');
   try{
-    const r = await nubeCall({action:'getAll'}, 60000); // 60s: puede ser una descarga grande
-    if(r && r.ok){
-      if(Array.isArray(r.materiales) && r.materiales.length){
-        localStorage.setItem('straza_materiales', JSON.stringify(r.materiales));
-        materiales = loadMateriales();
-      }
-      if(Array.isArray(r.cotizaciones)){
-        // Combinar con lo local (nunca perder algo que solo esté aquí) y
-        // guardar livianas (sin fotos pesadas) — las fotos se recuperan solas
-        // de la nube cuando se abre cada cotización.
-        const localActual = loadCotizaciones();
-        const combinadas = mezclarCotizaciones(localActual, r.cotizaciones);
-        const cotsLivianas = combinadas.map(function(c){
-          const copia=Object.assign({},c);
-          copia.productos=aligerarProductos(copia.productos);
-          return copia;
-        });
-        const resultado = saveCotizaciones(cotsLivianas);
-        if(resultado!==true){
-          nubeSetEstado('off','Sin espacio');
-          alert('Se descargaron los datos de la nube, pero NO caben en este navegador (sin espacio).\n\n'+
-            'Ve a ☁ Nube → Liberar espacio, o revisa el indicador de espacio, e inténtalo de nuevo.');
-          return;
-        }
-      }
-      nubeSetEstado('on','Conectado ✓');
-      showToast('Datos traídos de la nube ✓');
-      renderHistorial();
-      mostrarEspacioUsado();
-    } else {
-      nubeSetEstado('off','Sin datos');
-      showToast('La nube no devolvió datos.');
+    // Materiales: se traen completos (son livianos, sin fotos)
+    const rMat = await nubeCall({action:'getMateriales'}, 30000);
+    if(rMat && rMat.ok && Array.isArray(rMat.materiales) && rMat.materiales.length){
+      localStorage.setItem('straza_materiales', JSON.stringify(rMat.materiales));
+      materiales = loadMateriales();
     }
+    // Cotizaciones: se trae solo la LISTA liviana (nombre, código, fecha).
+    // El contenido completo de cada una se trae solo, y solo, cuando se abre.
+    // Esto es instantáneo sin importar si hay 20 o 20.000 cotizaciones.
+    const rLista = await nubeCall({action:'getListaCotizaciones'}, 30000);
+    if(rLista && rLista.ok && Array.isArray(rLista.lista)){
+      const localActual = loadCotizaciones();
+      const localPorId = {}; localActual.forEach(function(c){ localPorId[c.id]=c; });
+      const idsNube = {};
+      const combinadas = rLista.lista.map(function(meta){
+        idsNube[meta.id]=true;
+        const local = localPorId[meta.id];
+        // Si ya la tenemos completa y actualizada aquí, la conservamos completa
+        if(local && Array.isArray(local.productos) && !local._completoEnNube && (local.updatedAt||0)>=(meta.updatedAt||0)){
+          return local;
+        }
+        // Si no, solo guardamos el resumen — se completa sola al abrirla
+        return { id:meta.id, ref:meta.ref, cliente:meta.cliente, proyecto:meta.proyecto,
+                 updatedAt:meta.updatedAt, _completoEnNube:true };
+      });
+      // Conservar cualquier cotización que exista SOLO aquí (aún no sincronizada)
+      localActual.forEach(function(c){ if(!idsNube[c.id]) combinadas.push(c); });
+
+      const resultado = saveCotizaciones(combinadas);
+      if(resultado!==true){
+        nubeSetEstado('off','Sin espacio');
+        alert('No se pudo guardar el listado (sin espacio). Ve a ☁ Nube → Liberar espacio e inténtalo de nuevo.');
+        return;
+      }
+    }
+    nubeSetEstado('on','Conectado ✓');
+    showToast('Historial actualizado desde la nube ✓');
+    renderHistorial();
+    mostrarEspacioUsado();
   }catch(e){
     nubeSetEstado('off','Error');
-    const motivo = (e && e.message==='timeout') ? 'se demoró demasiado (muchas fotos). Intenta de nuevo, o libera espacio primero.'
+    const motivo = (e && e.message==='timeout') ? 'se demoró demasiado.'
                  : (e && e.message==='red') ? 'sin conexión a internet en este momento.'
                  : ('detalle: '+(e&&e.message||e));
     showToast('Error al descargar — '+motivo);
@@ -937,9 +952,12 @@ function aligerarProductos(productos){
   });
 }
 
-// Una vez la nube confirma que ya tiene la cotización completa (con fotos),
-// aligeramos SOLO la copia guardada en el navegador — nunca tocamos lo que
-// se está editando en pantalla en este momento (cotActual / window._prods).
+// Una vez la nube confirma que ya tiene la cotización completa, aligeramos SOLO
+// la copia guardada en el navegador — nunca tocamos lo que se está editando en
+// pantalla en este momento (cotActual / window._prods). También aprovechamos
+// para mantener el navegador liviano: solo se guardan completas las últimas
+// MAX_CACHE_FULL cotizaciones tocadas; las demás quedan solo con su nombre,
+// código y fecha (para el Historial), y se completan solas al abrirlas.
 function aligerarCopiaLocal(id){
   try{
     const lista=loadCotizaciones();
@@ -948,6 +966,24 @@ function aligerarCopiaLocal(id){
     const copia=JSON.parse(JSON.stringify(lista[idx]));
     copia.productos=aligerarProductos(copia.productos);
     lista[idx]=copia;
+
+    // Mantener el navegador liviano: solo MAX_CACHE_FULL cotizaciones completas a la vez
+    const completas=lista.filter(c=>Array.isArray(c.productos) && !c._completoEnNube);
+    if(completas.length>MAX_CACHE_FULL){
+      completas.sort((a,b)=>(a.updatedAt||0)-(b.updatedAt||0)); // más viejas primero
+      const sobran=completas.length-MAX_CACHE_FULL;
+      for(let i=0;i<sobran;i++){
+        const viejaId=completas[i].id;
+        if(viejaId===id) continue; // nunca aligerar la que se acaba de editar
+        const j=lista.findIndex(c=>c.id===viejaId);
+        if(j>=0){
+          lista[j]={ id:lista[j].id, ref:lista[j].ref, cliente:lista[j].cliente,
+                     proyecto:lista[j].proyecto, updatedAt:lista[j].updatedAt,
+                     _completoEnNube:true };
+        }
+      }
+    }
+
     saveCotizaciones(lista);
     mostrarEspacioUsado();
   }catch(e){}
@@ -987,14 +1023,18 @@ function renderHistorial(){
   const ord=[...filtrada].sort((a,b)=>b.updatedAt-a.updatedAt);
   grid.innerHTML=ord.map(c=>{
     const fecha=new Date(c.updatedAt).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'});
+    const esLiviana=!!c._completoEnNube;
     const nP=(c.productos||[]).length;
-    const total=calcGrandTotal(c);
+    const infoLinea=esLiviana
+      ? '<div class="hist-prods">☁ Completa en la nube — se carga al abrir</div>'
+      : '<div class="hist-prods">'+nP+' producto'+(nP!==1?'s':'')+' · IVA '+(c.iva||19)+'%</div>';
+    const totalLinea=esLiviana ? '' : '<div class="hist-total">Total: <span>'+cop(calcGrandTotal(c))+'</span></div>';
     return '<div class="hist-card">'
       +'<div class="hist-card-top"><div class="hist-ref">'+esc(c.ref||'Sin ref.')+'</div><div class="hist-date">'+fecha+'</div></div>'
       +'<div class="hist-cliente">'+esc(c.cliente||'Sin cliente')+'</div>'
       +(c.proyecto?'<div class="hist-proyecto">'+esc(c.proyecto)+'</div>':'')
-      +'<div class="hist-prods">'+nP+' producto'+(nP!==1?'s':'')+' · IVA '+(c.iva||19)+'%</div>'
-      +'<div class="hist-total">Total: <span>'+cop(total)+'</span></div>'
+      +infoLinea
+      +totalLinea
       +'<div class="hist-actions">'
       +'<button class="btn-abrir" onclick="abrirCotizacion(\''+c.id+'\')">✏ Abrir y editar</button>'
       +'<button class="btn-duplicar" onclick="duplicarCotizacion(\''+c.id+'\')">⎘ Duplicar</button>'
@@ -1024,9 +1064,27 @@ function nuevaCotizacion(){
   goTab(2);
 }
 
-function abrirCotizacion(id){
-  const lista=loadCotizaciones(); const cot=lista.find(c=>c.id===id);
+async function abrirCotizacion(id){
+  const lista=loadCotizaciones(); let cot=lista.find(c=>c.id===id);
   if(!cot) return;
+  if(cot._completoEnNube){
+    if(!nubeGetURL()){ showToast('Esta cotización solo tiene el resumen aquí. Conecta la nube para abrirla completa.'); return; }
+    showToast('Cargando la cotización completa desde la nube...');
+    try{
+      const r=await nubeCall({action:'getCotizacion', id:id});
+      if(r && r.ok && r.cotizacion){
+        cot=r.cotizacion;
+        const lista2=loadCotizaciones(); const idx2=lista2.findIndex(c=>c.id===id);
+        if(idx2>=0){ lista2[idx2]=cot; saveCotizaciones(lista2); }
+      } else {
+        showToast('No se pudo traer la cotización completa (revisa tu conexión)');
+        return;
+      }
+    }catch(e){
+      showToast('No se pudo conectar a la nube para traer esta cotización');
+      return;
+    }
+  }
   cotActual=JSON.parse(JSON.stringify(cot));
   prodIdC=(cotActual.productos||[]).reduce((mx,p)=>{ const n=parseInt(p.id.replace('p',''))||0; return Math.max(mx,n); },0);
   window._prods=JSON.parse(JSON.stringify(cotActual.productos||[]));
@@ -1047,9 +1105,12 @@ function recuperarFotosSiFaltan(id){
       const fotosPorId={};
       (r.cotizacion.productos||[]).forEach(p=>{ if(p.foto) fotosPorId[p.id]=p.foto; });
       window._prods.forEach(p=>{
-        if(p._fotoEnNube && fotosPorId[p.id]){ p.foto=fotosPorId[p.id]; delete p._fotoEnNube; }
+        if(p._fotoEnNube && fotosPorId[p.id]){
+          p.foto=fotosPorId[p.id]; delete p._fotoEnNube;
+          _actualizarFotoBox(p.id); // solo la casilla de la foto, sin tocar lo que se esté escribiendo
+        }
       });
-      renderProductos(); renderPreview();
+      renderPreview(); // panel aparte, de solo lectura — no interfiere con lo que se esté escribiendo
     }
   }).catch(()=>{ /* sin internet: se sigue viendo sin fotos, no es grave */ });
 }
@@ -1057,15 +1118,16 @@ function recuperarFotosSiFaltan(id){
 async function duplicarCotizacion(id){
   const lista=loadCotizaciones(); let orig=lista.find(c=>c.id===id);
   if(!orig) return;
-  // Si la original tiene fotos aligeradas, las traemos completas ANTES de
-  // duplicar (si no, la copia nueva quedaría sin fotos para siempre).
-  const faltanFotos=(orig.productos||[]).some(p=>p._fotoEnNube);
-  if(faltanFotos && nubeGetURL()){
-    showToast('Recuperando fotos antes de duplicar...');
+  // Si la original está aligerada (solo resumen, o le faltan fotos), la
+  // traemos completa de la nube ANTES de duplicar.
+  const faltaCompleta=!!orig._completoEnNube;
+  const faltanFotos=!faltaCompleta && (orig.productos||[]).some(p=>p._fotoEnNube);
+  if((faltaCompleta || faltanFotos) && nubeGetURL()){
+    showToast('Recuperando la cotización completa antes de duplicar...');
     try{
       const r=await nubeCall({action:'getCotizacion', id:id});
       if(r && r.ok && r.cotizacion) orig=r.cotizacion;
-    }catch(e){ /* seguimos con lo que haya localmente, sin esas fotos */ }
+    }catch(e){ /* seguimos con lo que haya localmente */ }
   }
   cotActual=JSON.parse(JSON.stringify(orig));
   cotActual.id='cot_'+Date.now();
@@ -1082,6 +1144,10 @@ function borrarCotizacion(id){
   if(!confirm('¿Eliminar esta cotización? No se puede deshacer.')) return;
   saveCotizaciones(loadCotizaciones().filter(c=>c.id!==id));
   renderHistorial();
+  // Borrar también de la nube (si no, volvería a aparecer al "Traer datos de la nube")
+  if(nubeGetURL()){
+    nubeCallPost('deleteCotizacionPost', {id:id}).catch(()=>{ /* si falla, queda local; se puede reintentar luego */ });
+  }
 }
 
 function cargarCotEnForm(cot){
@@ -1297,7 +1363,7 @@ function renderProductos(){
       +'</div>'
       +'<div class="prod-body">'
       +'<div class="foto-desc-row">'
-      +'<div class="foto-box" onclick="trigFoto(\''+p.id+'\')" title="Subir foto">'
+      +'<div class="foto-box" id="fotobox-'+p.id+'" onclick="trigFoto(\''+p.id+'\')" title="Subir foto">'
       +(p.foto?'<img src="'+p.foto+'">'
         :'<div class="foto-lbl"><div class="foto-icon">📷</div>Foto</div>')
       +'</div>'
@@ -1336,6 +1402,18 @@ function pSet(pid,key,val,rerender){
   if(p){ p[key]=val; if(rerender) renderProductos(); onCotChange(); }
 }
 function trigFoto(pid){ document.getElementById('fi-'+pid).click(); }
+// Actualiza SOLO la casilla de la foto de un producto, sin redibujar el resto
+// de la tarjeta — así no se pierde el foco ni lo que estés escribiendo en la
+// descripción justo cuando termina de subir la foto a Drive en segundo plano.
+function _actualizarFotoBox(pid){
+  const p=window._prods.find(x=>x.id===pid);
+  const box=document.getElementById('fotobox-'+pid);
+  if(!p||!box) return;
+  box.innerHTML = p.foto
+    ? '<img src="'+p.foto+'">'
+    : '<div class="foto-lbl"><div class="foto-icon">📷</div>Foto</div>';
+}
+
 function loadFoto(pid,inp){
   if(!inp.files[0]) return;
   const r=new FileReader();
@@ -1345,7 +1423,7 @@ function loadFoto(pid,inp){
       if(!p) return;
       // Vista previa instantánea mientras se sube a Drive en segundo plano
       p.foto=fotoComprimida;
-      renderProductos();
+      _actualizarFotoBox(pid);
       if(cotActual) guardarCotizacion();
       if(nubeGetURL()){
         showToast('Subiendo foto...');
@@ -1353,7 +1431,7 @@ function loadFoto(pid,inp){
           const p2=window._prods.find(x=>x.id===pid);
           if(p2 && url){
             p2.foto=url; // reemplaza el texto pesado por un enlace liviano
-            renderProductos();
+            _actualizarFotoBox(pid);
             if(cotActual) guardarCotizacion();
             showToast('Foto subida ✓');
           } else if(p2){
